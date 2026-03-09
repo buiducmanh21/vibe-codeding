@@ -1,65 +1,127 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from fastapi.responses import StreamingResponse
+from typing import List, Optional
+import csv
+import io
 
 from . import crud, models, schemas
 from .database import engine, get_db
 
-# Lệnh này sẽ tự động tạo các bảng trong SQLite dựa trên models.py nếu chúng chưa tồn tại
+# Tạo bảng trong database
 models.Base.metadata.create_all(bind=engine)
 
-# Khởi tạo ứng dụng FastAPI
-app = FastAPI(title="Student Management API")
+app = FastAPI(title="Student Management System Pro")
 
-# CẤU HÌNH CORS: Rất quan trọng! 
-# Cho phép Frontend (React chạy ở port khác) có thể gọi API tới Backend mà không bị trình duyệt chặn.
+# Cấu hình CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Cho phép tất cả các domain gọi tới (trong thực tế nên giới hạn lại)
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Cho phép tất cả các method (GET, POST, PUT, DELETE...)
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- ĐỊNH NGHĨA CÁC API ENDPOINTS ---
+# --- TRANG CHỦ (ROOT) ---
+@app.get("/")
+def read_root():
+    return {
+        "message": "Welcome to Student Management API",
+        "documentation": "/docs",
+        "status": "Running"
+    }
 
-# 1. Lấy danh sách sinh viên
+# --- API CHO LỚP HỌC (CLASSES) ---
+
+@app.get("/api/classes/", response_model=List[schemas.Class])
+def read_classes(db: Session = Depends(get_db)):
+    return crud.get_classes(db)
+
+@app.post("/api/classes/", response_model=schemas.Class)
+def create_class(classroom: schemas.ClassCreate, db: Session = Depends(get_db)):
+    db_class = crud.get_class(db, class_id=classroom.class_id)
+    if db_class:
+        raise HTTPException(status_code=400, detail="Class ID already exists")
+    return crud.create_class(db=db, classroom=classroom)
+
+# --- API CHO SINH VIÊN (STUDENTS) ---
+
 @app.get("/api/students/", response_model=List[schemas.Student])
-def read_students(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    students = crud.get_students(db, skip=skip, limit=limit)
-    return students
+def read_students(
+    search: Optional[str] = Query(None), 
+    db: Session = Depends(get_db)
+):
+    # Tìm kiếm sinh viên theo tên (Yêu cầu 3)
+    return crud.get_students(db, search=search)
 
-# 2. Lấy thông tin 1 sinh viên
 @app.get("/api/students/{student_id}", response_model=schemas.Student)
 def read_student(student_id: str, db: Session = Depends(get_db)):
     db_student = crud.get_student(db, student_id=student_id)
-    if db_student is None:
+    if not db_student:
         raise HTTPException(status_code=404, detail="Student not found")
     return db_student
 
-# 3. Thêm sinh viên mới
-@app.post("/api/students/", response_model=schemas.Student, status_code=201)
+@app.post("/api/students/", response_model=schemas.Student)
 def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    # Kiểm tra xem ID đã tồn tại chưa
+    # Kiểm tra lớp học có tồn tại không (Yêu cầu 2)
+    db_class = crud.get_class(db, class_id=student.class_id)
+    if not db_class:
+        raise HTTPException(status_code=400, detail="Class ID does not exist")
+    
     db_student = crud.get_student(db, student_id=student.student_id)
     if db_student:
-        raise HTTPException(status_code=400, detail="Student ID already registered")
+        raise HTTPException(status_code=400, detail="Student ID already exists")
     return crud.create_student(db=db, student=student)
 
-# 4. Cập nhật thông tin sinh viên
 @app.put("/api/students/{student_id}", response_model=schemas.Student)
 def update_student(student_id: str, student: schemas.StudentUpdate, db: Session = Depends(get_db)):
-    db_student = crud.get_student(db, student_id=student_id)
-    if db_student is None:
-        raise HTTPException(status_code=404, detail="Student not found")
     return crud.update_student(db=db, student_id=student_id, student_update=student)
 
-# 5. Xóa sinh viên
 @app.delete("/api/students/{student_id}")
 def delete_student(student_id: str, db: Session = Depends(get_db)):
-    db_student = crud.get_student(db, student_id=student_id)
-    if db_student is None:
-        raise HTTPException(status_code=404, detail="Student not found")
     crud.delete_student(db=db, student_id=student_id)
-    return {"message": "Student deleted successfully"}
+    return {"message": "Deleted"}
+
+# --- THỐNG KÊ (STATISTICS - Yêu cầu 4) ---
+
+@app.get("/api/stats/")
+def get_stats(db: Session = Depends(get_db)):
+    total_students = db.query(models.Student).count()
+    avg_gpa = db.query(func.avg(models.Student.gpa)).scalar() or 0
+    
+    # Số sinh viên theo ngành
+    major_stats = db.query(
+        models.Student.major, func.count(models.Student.student_id)
+    ).group_by(models.Student.major).all()
+    
+    return {
+        "total_students": total_students,
+        "average_gpa": round(avg_gpa, 2),
+        "students_by_major": {major: count for major, count in major_stats}
+    }
+
+# --- XUẤT CSV (EXPORT CSV - Yêu cầu 5) ---
+
+@app.get("/api/export-csv/")
+def export_csv(db: Session = Depends(get_db)):
+    students = db.query(models.Student).all()
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Viết tiêu đề cột
+    writer.writerow(["Student ID", "Name", "Birth Year", "Major", "GPA", "Class ID"])
+    
+    # Viết dữ liệu
+    for s in students:
+        writer.writerow([s.student_id, s.name, s.birth_year, s.major, s.gpa, s.class_id])
+    
+    output.seek(0)
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=students.csv"}
+    )

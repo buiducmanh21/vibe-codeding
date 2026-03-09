@@ -8,7 +8,7 @@ const StudentTable = ({ students, onEdit, onDelete }) => {
           <tr>
             <th scope="col" className="px-6 py-3">Student ID</th>
             <th scope="col" className="px-6 py-3">Name</th>
-            <th scope="col" className="px-6 py-3">Birth Year</th>
+            <th scope="col" className="px-6 py-3 text-blue-600">Class</th>
             <th scope="col" className="px-6 py-3">Major</th>
             <th scope="col" className="px-6 py-3">GPA</th>
             <th scope="col" className="px-6 py-3">Actions</th>
@@ -20,11 +20,15 @@ const StudentTable = ({ students, onEdit, onDelete }) => {
               <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
                 {student.student_id}
               </td>
-              <td className="px-6 py-4">{student.name}</td>
-              <td className="px-6 py-4">{student.birth_year}</td>
+              <td className="px-6 py-4 font-bold">{student.name}</td>
+              <td className="px-6 py-4">
+                <span className="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">
+                  {student.class_id}
+                </span>
+              </td>
               <td className="px-6 py-4">{student.major}</td>
               <td className="px-6 py-4">{student.gpa}</td>
-              <td className="px-6 py-4 flex gap-2">
+              <td className="px-6 py-4 flex gap-3">
                 <button
                   onClick={() => onEdit(student)}
                   className="font-medium text-blue-600 hover:underline"
